@@ -137,6 +137,10 @@ class UAVEnvironment(gym.Env):
         self.current_time = 0.0
         self.total_throughput = 0.0
         self.episode_throughput_history = []
+
+        # Default transmission strategy (can be changed via setter)
+        self.default_beamforming_method: str = 'mrt'
+        self.default_power_strategy: str = 'proportional'
         
 
         
@@ -150,6 +154,18 @@ class UAVEnvironment(gym.Env):
         # Define action and observation spaces
         self._setup_spaces()
     
+    def set_transmit_strategy(self,
+                              beamforming_method: Optional[str] = None,
+                              power_strategy: Optional[str] = None) -> None:
+        """
+        Configure default beamforming and power allocation strategies used in throughput calculation.
+        If not set, environment defaults are used ('mrt' + 'proportional').
+        """
+        if beamforming_method is not None:
+            self.default_beamforming_method = beamforming_method
+        if power_strategy is not None:
+            self.default_power_strategy = power_strategy
+
     def _setup_spaces(self):
         """Setup action and observation spaces for the environment."""
         
@@ -245,7 +261,10 @@ class UAVEnvironment(gym.Env):
         # If speed is 0, UAV hovers (no movement)
         
         # Calculate throughput for current position
-        current_throughput = self._calculate_throughput()
+        current_throughput = self._calculate_throughput(
+            beamforming_method=getattr(self, 'default_beamforming_method', 'mrt'),
+            power_strategy=getattr(self, 'default_power_strategy', 'proportional')
+        )
         self.total_throughput += current_throughput
         self.episode_throughput_history.append(current_throughput)
         
@@ -266,7 +285,9 @@ class UAVEnvironment(gym.Env):
         
         return observation, reward, terminated, truncated, info
     
-    def _calculate_throughput(self, beamforming_method='mrt', power_strategy='proportional') -> float:
+    def _calculate_throughput(self,
+                              beamforming_method: Optional[str] = None,
+                              power_strategy: Optional[str] = None) -> float:
         """
         Calculate total throughput for current UAV position.
         
@@ -276,6 +297,13 @@ class UAVEnvironment(gym.Env):
         uav_position = self.uav.get_position()
         user_positions = self.user_manager.get_user_positions()
         
+        # Resolve strategies: prefer call arguments, otherwise defaults
+        bm = beamforming_method or getattr(self, 'default_beamforming_method', 'mrt')
+        ps = power_strategy or getattr(self, 'default_power_strategy', 'proportional')
+
+        # print(f"uav_env power_strategy: {ps}")
+        # print(f"uav_env beamforming_method: {bm}")
+
         # Use signal processor's unified interface
         # Algorithm selection is handled in the SignalProcessor (Utils layer)
         total_throughput = self.signal_processor.calculate_system_throughput(
@@ -284,8 +312,8 @@ class UAVEnvironment(gym.Env):
             num_antennas=self.num_antennas,
             total_power_constraint=self.transmit_power,
             channel_model=self.channel_model,
-            beamforming_method=beamforming_method,
-            power_strategy=power_strategy
+            beamforming_method=bm,
+            power_strategy=ps
         )
         
         # Update user throughput history (for info only)
@@ -394,7 +422,9 @@ class UAVEnvironment(gym.Env):
             'end_position': self.end_position.tolist(),
             'signal_indicators': self._get_signal_quality_indicators().tolist(),
             'remaining_time': self.remaining_time,
-            'individual_throughputs': self.signal_processor.get_last_individual_throughputs()
+            'individual_throughputs': self.signal_processor.get_last_individual_throughputs(),
+            'beamforming_method': getattr(self, 'default_beamforming_method', 'mrt'),
+            'power_strategy': getattr(self, 'default_power_strategy', 'proportional')
         }
         
         # Reward breakdown information (for debugging/analysis)

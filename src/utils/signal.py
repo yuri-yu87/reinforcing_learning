@@ -389,21 +389,35 @@ class SignalProcessor:
         # Interference matrix calculation
         interference_matrix = self.calculate_interference_matrix(channel_coeffs, beamforming_vectors)
 
-        # Power allocation strategy
+        # Power allocation strategy - FIXED: Use original channel coefficients for proportional allocation
         if power_optimization_strategy == 'equal':
             power_allocation = self.optimize_power_allocation(
                 effective_channels, total_power_constraint, method='equal'
             )
         elif power_optimization_strategy == 'proportional':
-            power_allocation = self.optimize_power_allocation(
-                effective_channels, total_power_constraint, method='proportional'
-            )
+            # Use original channel coefficients for proportional allocation (not effective channels)
+            # Calculate average channel gain for each user from original channel coefficients
+            original_channel_gains = []
+            for i in range(num_users):
+                # Use average channel gain from original multi-antenna channel
+                avg_gain = np.mean(np.abs(channel_coeffs[i]) ** 2)
+                original_channel_gains.append(avg_gain)
+            
+            original_channel_gains = np.array(original_channel_gains)
+            total_gain = np.sum(original_channel_gains)
+            if total_gain > 0:
+                power_allocation = original_channel_gains / total_gain
+            else:
+                power_allocation = np.full(num_users, 1.0 / num_users)
         elif power_optimization_strategy == 'water_filling':
             power_allocation = self.optimize_power_allocation(
                 effective_channels, total_power_constraint, method='water_filling'
             )
         else:
             raise ValueError(f"Unknown power optimization strategy: {power_optimization_strategy}")
+
+        # DEBUG: Print power allocation for verification
+        # print(f"DEBUG: Strategy={power_optimization_strategy}, Power allocation={power_allocation}")
 
         return {
             'beamforming_vectors': beamforming_vectors,
@@ -451,6 +465,7 @@ class SignalProcessor:
         """
         Combines joint beamforming and power optimization with performance metric calculation.
         """
+        # print(f"DEBUG: get_joint_optimization_metrics, power_optimization_strategy={power_optimization_strategy}")
         optimization_results = self.joint_beamforming_power_optimization(
             channel_coeffs, total_power_constraint, beamforming_method, power_optimization_strategy
         )
@@ -488,6 +503,7 @@ class SignalProcessor:
         
         channel_coeffs = np.array(channel_coeffs)  # Shape: (num_users, num_antennas)
         
+        # print(f"signal processor power_strategy: {power_strategy}")
         # Use joint optimization for best performance
         try:
             performance_metrics = self.get_joint_optimization_metrics(
@@ -497,7 +513,7 @@ class SignalProcessor:
                 power_optimization_strategy=power_strategy,
                 noise_power=channel_model.noise_power
             )
-            
+            # print(f"signal processor performance_metrics: {performance_metrics}")
             # Store individual throughputs for user update
             self._last_individual_throughputs = performance_metrics['spectral_efficiency_values']
             
@@ -506,7 +522,7 @@ class SignalProcessor:
         except Exception as e:
             # Fallback to simple MRT if optimization fails
             # print(f"Warning: Joint optimization failed ({e}), using simple MRT fallback")
-            
+            print(f"Fallback to MRT: {e}")
             # Simple MRT fallback
             beamforming_vectors = self.beamforming.maximum_ratio_transmission(
                 channel_coeffs, total_power_constraint

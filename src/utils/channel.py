@@ -40,7 +40,7 @@ class ChannelModel:
         
         if seed is not None:
             np.random.seed(seed)
-    
+
     def calculate_distance(self, uav_position: np.ndarray, user_position: np.ndarray) -> float:
         """
         Calculate 3D distance between UAV and user.
@@ -83,6 +83,23 @@ class ChannelModel:
             antenna_position = uav_position.copy()
             antenna_position[1] += antenna_y_offset  # Y-axis offset
             distance = self.calculate_distance(antenna_position, user_position)
+        
+        if distance <= 0:
+            return 0.0
+        
+        # Calculate LoS component: h_k^LoS = e^(j * 2π * d_k / λ)
+        los_phase = 2 * np.pi * distance / self.wavelength
+        los_component = np.exp(1j * los_phase)
+        
+        # Channel coefficient: hk = sqrt(L0/ d_k^η) * h_k^LoS
+        path_loss_factor = np.sqrt(self.L0 / (distance ** self.path_loss_exponent))
+        channel_coeff = path_loss_factor * los_component
+        
+        return channel_coeff
+
+    # for figure 1 and 2
+    def calculate_channel_coefficient_distance(self, 
+                                    distance: float) -> complex:
         
         if distance <= 0:
             return 0.0
