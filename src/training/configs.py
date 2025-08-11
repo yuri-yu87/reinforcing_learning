@@ -19,7 +19,7 @@ class TrainingConfig:
     transmit_power: float = 0.5
     
     # Agent parameters
-    agent_type: str = 'ppo'  # 'ppo', 'baseline'
+    agent_type: str = 'dqn'  # 'ppo', 'baseline'
     learning_rate: float = 3e-4
     gamma: float = 0.99
     batch_size: int = 64

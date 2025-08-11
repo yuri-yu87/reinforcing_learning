@@ -8,9 +8,10 @@ import numpy as np
 from typing import Dict, Any, Optional
 import gymnasium as gym
 from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3 import DQN as SB3DQN
+from gymnasium.wrappers import RecordEpisodeStatistics
 
 from ..environment.uav_env import UAVEnvironment
-from ..agents import PPOAgent, BaselineAgent, Benchmark1Agent, Benchmark2Agent
 from .configs import TrainingConfig
 
 
@@ -24,7 +25,15 @@ class TrainingCallback(BaseCallback):
         self.training_start_time = time.time()
         
     def _on_step(self) -> bool:
-        """Called after each step."""
+        """Collect per-episode stats from SB3 infos when episodes finish."""
+        dones = self.locals.get('dones')
+        infos = self.locals.get('infos')
+        if dones is not None and infos is not None:
+            for done, info in zip(dones, infos):
+                if done and isinstance(info, dict) and 'episode' in info:
+                    ep = info['episode']  # {'r': return, 'l': length}
+                    self.episode_rewards.append(float(ep.get('r', 0.0)))
+                    self.episode_lengths.append(int(ep.get('l', 0)))
         return True
     
     def _on_rollout_end(self) -> None:
@@ -76,34 +85,31 @@ class Trainer:
         Returns:
             Configured environment
         """
-        # Determine beamforming configuration based on agent type
-        use_optimized_beamforming = True
-        beamforming_method = self.config.beamforming_method
-        
-        # Handle legacy benchmark_scenario if present
-        if hasattr(self.config, 'benchmark_scenario'):
-            if 'random_beam' in self.config.benchmark_scenario:
-                use_optimized_beamforming = False
-                beamforming_method = 'random'
-        
-        self.env = UAVEnvironment(
+        # Create base environment (strategy-agnostic)
+        base_env = UAVEnvironment(
             env_size=self.config.env_size,
             num_users=self.config.num_users,
             num_antennas=self.config.num_antennas,
-            start_position=(10, 10, 50),
+            start_position=(0, 0, 50),
             end_position=(80, 80, 50),
-            flight_time=250.0,
-            time_step=0.1,
+            flight_time=300.0,
+            time_step=0.01,
             transmit_power=self.config.transmit_power,
             max_speed=30.0,
             min_speed=10.0,
-            beamforming_method=beamforming_method,
-            power_optimization_strategy=self.config.power_optimization_strategy,
-            use_optimized_beamforming=use_optimized_beamforming,
             fixed_users=True,
             seed=42
         )
-        
+        # Configure default transmit strategy
+        try:
+            base_env.set_transmit_strategy(
+                beamforming_method=self.config.beamforming_method,
+                power_strategy=self.config.power_optimization_strategy,
+            )
+        except Exception:
+            pass
+        # Wrap to record episode statistics for SB3 callback
+        self.env = RecordEpisodeStatistics(base_env)
         return self.env
     
     def setup_agent(self) -> None:
@@ -126,22 +132,18 @@ class Trainer:
             # Setup PPO model
             self.agent.setup_model(self.env)
             
-        elif self.config.agent_type == 'baseline':
-            self.agent = BaselineAgent(
-                observation_space=self.env.observation_space,
-                action_space=self.env.action_space,
-                strategy=self.config.baseline_strategy
+        elif self.config.ag  ent_type == 'dqn':
+            # SB3 DQN for discrete action space
+            self.agent = SB3DQN(
+                policy='MlpPolicy',
+                env=self.env,
+                learning_rate=self.config.learning_rate,
+                gamma=self.config.gamma,
+                batch_size=self.config.batch_size,
+                verbose=self.config.verbose,
+                tensorboard_log=self.config.tensorboard_log,
             )
-        elif self.config.agent_type == 'benchmark_1':
-            self.agent = Benchmark1Agent(
-                observation_space=self.env.observation_space,
-                action_space=self.env.action_space
-            )
-        elif self.config.agent_type == 'benchmark_2':
-            self.agent = Benchmark2Agent(
-                observation_space=self.env.observation_space,
-                action_space=self.env.action_space
-            )
+    
             
         else:
             raise ValueError(f"Unknown agent type: {self.config.agent_type}")
@@ -168,9 +170,15 @@ class Trainer:
                 callback=self.callback
             )
             
-        elif self.config.agent_type == 'baseline':
-            # Baseline agents don't need training, just evaluation
-            self._evaluate_baseline()
+        elif self.config.agent_type == 'dqn':
+            # SB3 DQN learn loop
+            self.callback = TrainingCallback(verbose=self.config.verbose)
+            self.agent.learn(
+                total_timesteps=self.config.total_timesteps,
+                callback=self.callback,
+                progress_bar=False,
+            )
+        
         
         training_time = time.time() - start_time
         
@@ -250,12 +258,15 @@ class Trainer:
             episode_throughput = 0
             
             while True:
-                action = self.agent.select_action(obs, deterministic=deterministic)
+                if self.config.agent_type == 'dqn':
+                    action, _ = self.agent.predict(obs, deterministic=deterministic)
+                else:
+                    action = self.agent.select_action(obs, deterministic=deterministic)
                 obs, reward, terminated, truncated, info = self.env.step(action)
                 
                 episode_reward += reward
                 episode_length += 1
-                episode_throughput += info.get('average_throughput', 0)
+                episode_throughput += info.get('throughput', 0.0)
                 
                 if terminated or truncated:
                     break

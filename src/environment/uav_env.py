@@ -183,9 +183,12 @@ class UAVEnvironment(gym.Env):
         }
         
         # Observation space: simplified and focused
-        # [uav_x, uav_y, uav_z, end_x, end_y, end_z, remaining_time_ratio, 
-        #  signal_quality_user_0, signal_quality_user_1, ..., current_throughput]
-        obs_dim = 3 + 3 + 1 + self.num_users + 1  # UAV(3) + End(3) + Time(1) + Users(N) + Throughput(1)
+        # Include geometric cues: deltas to end and to each user (2D), plus coarse signal indicators
+        # [uav_x, uav_y, uav_z, end_x, end_y, end_z, remaining_time_ratio,
+        #  signal_quality_user_0..N-1, current_throughput,
+        #  delta_end_x, delta_end_y, user0_dx, user0_dy, ..., userN-1_dx, userN-1_dy]
+        geom_dims = 2 + 2 * self.num_users
+        obs_dim = 3 + 3 + 1 + self.num_users + 1 + geom_dims
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
@@ -193,18 +196,23 @@ class UAVEnvironment(gym.Env):
             dtype=np.float32
         )
     
-    def reset(self, seed: Optional[int] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
+    def reset(self, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
         """
         Reset environment to initial state.
         
         Args:
             seed: Random seed for reproducibility
+            options: Optional dict passed by Gymnasium wrappers (unused)
             
         Returns:
             Tuple[np.ndarray, Dict]: Initial observation and info
         """
-        if seed is not None:
-            np.random.seed(seed)
+        # Ensure compatibility with gymnasium wrappers that pass options
+        try:
+            super().reset(seed=seed)
+        except Exception:
+            if seed is not None:
+                np.random.seed(seed)
         
         # Reset UAV to start position
         self.uav.reset(self.start_position)
@@ -278,6 +286,17 @@ class UAVEnvironment(gym.Env):
         
         # Calculate simple, focused reward
         reward = self._calculate_reward(current_throughput)
+        
+        # Additional anti-stall shaping: penalize hovering or near-zero displacement far from the end
+        # Detect displacement in this step
+        if len(self.uav.trajectory) >= 2:
+            prev_pos = self.uav.trajectory[-2]
+            disp = np.linalg.norm(self.uav.get_position() - prev_pos)
+        else:
+            disp = 0.0
+        far_from_end = np.linalg.norm(self.uav.get_position() - self.end_position) > (2.0 * self.reward_config.end_position_tolerance)
+        if disp < 1e-3 and far_from_end:
+            reward -= self.reward_config.hover_penalty
         
         # Get observation and info
         observation = self._get_observation()
@@ -367,13 +386,23 @@ class UAVEnvironment(gym.Env):
         # Current throughput
         current_throughput = self.episode_throughput_history[-1] if self.episode_throughput_history else 0.0
         
+        # Geometric helpers: normalized deltas
+        env_w, env_h = self.env_size[0], self.env_size[1]
+        delta_end = (end_pos[:2] - uav_pos[:2]) / np.array([env_w, env_h], dtype=np.float32)
+        user_positions = self.user_manager.get_user_positions()
+        deltas_users = []
+        for user_pos in user_positions:
+            deltas_users.extend(((user_pos[:2] - uav_pos[:2]) / np.array([env_w, env_h], dtype=np.float32)).tolist())
+        
         # Combine observation components
         observation = np.concatenate([
             uav_pos,                    # UAV position (3)
             end_pos,                    # End position (3)
             [remaining_time_ratio],     # Remaining time ratio (1)
             signal_quality_indicators,  # Signal quality per user (num_users)
-            [current_throughput]        # Current throughput (1)
+            [current_throughput],       # Current throughput (1)
+            delta_end.astype(np.float32),           # (2)
+            np.array(deltas_users, dtype=np.float32)  # (2*num_users)
         ], dtype=np.float32)
         
         return observation
@@ -400,12 +429,10 @@ class UAVEnvironment(gym.Env):
                 uav_position, user_pos
             )
             
-            # Use channel magnitude as signal quality indicator
-            signal_strength = np.linalg.norm(channel_coeff)
-            
-            # Normalize to [0, 1] range
-            signal_indicator = np.clip(signal_strength * 10000.0, 0.0, 1.0)
-            signal_indicators.append(signal_indicator)
+            # Use channel magnitude as signal quality indicator with soft log scaling
+            signal_strength = np.abs(channel_coeff)
+            signal_indicator = np.log1p(1e4 * signal_strength).real
+            signal_indicators.append(float(signal_indicator))
         
         return np.array(signal_indicators, dtype=np.float32)
     

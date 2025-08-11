@@ -329,17 +329,3 @@ class PPOAgent(BaseAgent):
         return (f"PPOAgent(learning_rate={self.learning_rate}, "
                 f"n_steps={self.n_steps}, batch_size={self.batch_size}, "
                 f"gamma={self.gamma}, clip_range={self.clip_range})")
-
-
-# Benchmark-specific PPO agents for the four scenarios
-class Benchmark3Agent(PPOAgent):
-    """Benchmark 3: RL trajectory + Random beamforming."""
-    
-    def __init__(self, observation_space: gym.Space, action_space: gym.Space, **kwargs):
-        super().__init__(observation_space, action_space, beamforming_type='random', **kwargs)
-
-class Benchmark4Agent(PPOAgent):
-    """Benchmark 4: RL trajectory + Optimized beamforming."""
-    
-    def __init__(self, observation_space: gym.Space, action_space: gym.Space, **kwargs):
-        super().__init__(observation_space, action_space, beamforming_type='optimized', **kwargs) 

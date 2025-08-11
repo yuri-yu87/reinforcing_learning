@@ -176,6 +176,7 @@ class DQNAgent(BaseAgent):
         # Training metrics
         self.losses = []
         self.q_values = []
+        self.episode_rewards = []
         
     def select_action(self, observation: np.ndarray, deterministic: bool = False) -> int:
         """
@@ -316,6 +317,8 @@ class DQNAgent(BaseAgent):
                           f"Reward: {episode_reward:.2f}, Epsilon: {self.epsilon:.3f}")
             
             episode += 1
+            # Store episode reward for convergence curve plotting
+            self.episode_rewards.append(float(episode_reward))
         
         print(f"✅ DQN training completed! Total episodes: {episode}")
     
@@ -341,18 +344,3 @@ class DQNAgent(BaseAgent):
         self.steps_done = checkpoint.get('steps_done', 0)
         self.training_step = checkpoint.get('training_step', 0)
         print(f"📂 DQN model loaded from {filepath}")
-
-
-# Benchmark agents using DQN
-class Benchmark3DQNAgent(DQNAgent):
-    """Benchmark 3: DQN with random beamforming."""
-    
-    def __init__(self, observation_space: spaces.Space, action_space: spaces.Space, **kwargs):
-        super().__init__(observation_space, action_space, beamforming_type='random', **kwargs)
-
-
-class Benchmark4DQNAgent(DQNAgent):
-    """Benchmark 4: DQN with optimized beamforming."""
-    
-    def __init__(self, observation_space: spaces.Space, action_space: spaces.Space, **kwargs):
-        super().__init__(observation_space, action_space, beamforming_type='mrt', **kwargs)
