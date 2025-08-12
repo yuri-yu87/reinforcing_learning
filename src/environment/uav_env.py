@@ -114,6 +114,13 @@ class UAVEnvironment(gym.Env):
         self.reward_config = reward_config if reward_config is not None else RewardConfig()
         self.reward_calculator = RewardCalculator(self.reward_config)
         
+        # Mission timing (200-300s window constraint)
+        self.mission_time_window = (self.reward_config.min_flight_time, self.reward_config.max_flight_time)
+        
+        # Safety guards and emergency mode
+        self.emergency_mode = False
+        self.previous_action = None
+        
         # Initialize components
         self.uav = UAV(
             start_position=self.start_position,
@@ -233,7 +240,11 @@ class UAVEnvironment(gym.Env):
         self.total_throughput = 0.0
         
         # Reset reward calculator state
-        self.reward_calculator.reset(self.num_users)
+        self.reward_calculator.reset()
+        
+        # Reset safety and emergency state
+        self.emergency_mode = False
+        self.previous_action = None
         self.episode_throughput_history = []
         
         # Get initial observation
@@ -244,7 +255,7 @@ class UAVEnvironment(gym.Env):
     
     def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
         """
-        Execute one step in the environment.
+        Execute one step in the environment with safety guards and new reward strategy.
         
         Args:
             action: Discrete action integer (0=East, 1=South, 2=West, 3=North, 4=Hover)
@@ -252,9 +263,13 @@ class UAVEnvironment(gym.Env):
         Returns:
             Tuple: (observation, reward, terminated, truncated, info)
         """
+        # === Action guards and emergency mode ===
+        original_action = action
+        guarded_action = self._apply_action_guards(action)
+        
         # Convert discrete action to continuous action format
-        if action in self.discrete_actions:
-            continuous_action = self.discrete_actions[action]
+        if guarded_action in self.discrete_actions:
+            continuous_action = self.discrete_actions[guarded_action]
         else:
             # Default to hover if invalid action
             continuous_action = self.discrete_actions[4]
@@ -264,9 +279,11 @@ class UAVEnvironment(gym.Env):
         speed = continuous_action[2]
         
         # Move UAV
+        current_speed = 0.0
         if speed > 0:
+            prev_position = self.uav.get_position().copy()
             self.uav.move(movement_direction, speed, self.time_step)
-        # If speed is 0, UAV hovers (no movement)
+            current_speed = np.linalg.norm(self.uav.get_position() - prev_position) / self.time_step
         
         # Calculate throughput for current position
         current_throughput = self._calculate_throughput(
@@ -283,26 +300,29 @@ class UAVEnvironment(gym.Env):
         # Check termination conditions
         terminated = self._is_terminated()
         truncated = self.current_time >= self.flight_time
+        episode_done = terminated or truncated
+        reached_end = self._check_reached_end()
         
-        # Calculate simple, focused reward
-        reward = self._calculate_reward(current_throughput)
-        
-        # Additional anti-stall shaping: penalize hovering or near-zero displacement far from the end
-        # Detect displacement in this step
-        if len(self.uav.trajectory) >= 2:
-            prev_pos = self.uav.trajectory[-2]
-            disp = np.linalg.norm(self.uav.get_position() - prev_pos)
-        else:
-            disp = 0.0
-        far_from_end = np.linalg.norm(self.uav.get_position() - self.end_position) > (2.0 * self.reward_config.end_position_tolerance)
-        if disp < 1e-3 and far_from_end:
-            reward -= self.reward_config.hover_penalty
+        # === Calculate reward using new strategy ===
+        reward_breakdown = self._calculate_new_reward(
+            current_throughput, current_speed, episode_done, reached_end
+        )
         
         # Get observation and info
         observation = self._get_observation()
         info = self._get_info()
+        info.update({
+            'reward_breakdown': reward_breakdown,
+            'original_action': original_action,
+            'guarded_action': guarded_action,
+            'emergency_mode': self.emergency_mode,
+            'reached_end': reached_end
+        })
         
-        return observation, reward, terminated, truncated, info
+        # Store action for next step
+        self.previous_action = guarded_action
+        
+        return observation, reward_breakdown['total'], terminated, truncated, info
     
     def _calculate_throughput(self,
                               beamforming_method: Optional[str] = None,
@@ -506,6 +526,126 @@ class UAVEnvironment(gym.Env):
     def get_throughput_history(self) -> List[float]:
         """Get throughput history for the current episode."""
         return self.episode_throughput_history
+    
+    def _apply_action_guards(self, action: int) -> int:
+        """
+        Apply safety guards and emergency mode for action selection.
+        
+        Returns:
+            Guarded action that respects bounds and emergency constraints
+        """
+        # Check emergency mode: if ETA > remaining time, beeline to end
+        eta_to_end = self._estimate_time_to_end()
+        remaining_time = self.flight_time - self.current_time
+        
+        if eta_to_end > remaining_time * 1.1:  # 10% buffer
+            self.emergency_mode = True
+        
+        if self.emergency_mode:
+            # Override with action toward end position
+            action = self._get_action_toward_end()
+        
+        # Check bounds and reflect if necessary
+        next_pos = self._predict_next_position(action)
+        if self._is_out_of_bounds(next_pos):
+            # Find feasible action or default to hover
+            for candidate_action in [0, 1, 2, 3, 4]:  # Try all actions
+                candidate_pos = self._predict_next_position(candidate_action)
+                if not self._is_out_of_bounds(candidate_pos):
+                    return candidate_action
+            return 4  # Hover if all actions lead out of bounds
+        
+        return action
+    
+    def _estimate_time_to_end(self) -> float:
+        """Estimate time to reach end position at max speed"""
+        current_pos = self.uav.get_position()
+        distance = np.linalg.norm(current_pos - self.end_position)
+        return distance / self.max_speed
+    
+    def _get_action_toward_end(self) -> int:
+        """Get action that moves UAV toward end position"""
+        current_pos = self.uav.get_position()
+        direction = self.end_position - current_pos
+        direction = direction[:2]  # Only x, y
+        
+        if np.linalg.norm(direction) < 1e-6:
+            return 4  # Hover if at end
+        
+        # Normalize direction
+        direction = direction / np.linalg.norm(direction)
+        
+        # Map to discrete action
+        if abs(direction[0]) > abs(direction[1]):
+            return 0 if direction[0] > 0 else 2  # East or West
+        else:
+            return 3 if direction[1] > 0 else 1  # North or South
+    
+    def _predict_next_position(self, action: int) -> np.ndarray:
+        """Predict next position if action is taken"""
+        current_pos = self.uav.get_position()
+        
+        if action in self.discrete_actions:
+            movement = self.discrete_actions[action]
+            direction = movement[:2]
+            speed = movement[2]
+            
+            if speed > 0:
+                displacement = direction * speed * self.time_step
+                next_pos = current_pos + np.array([displacement[0], displacement[1], 0])
+            else:
+                next_pos = current_pos
+        else:
+            next_pos = current_pos
+        
+        return next_pos
+    
+    def _is_out_of_bounds(self, position: np.ndarray) -> bool:
+        """Check if position is out of bounds"""
+        x, y, z = position
+        return (x < 0 or x > self.env_size[0] or 
+                y < 0 or y > self.env_size[1])
+    
+    def _check_reached_end(self) -> bool:
+        """Check if UAV has reached end position"""
+        current_pos = self.uav.get_position()
+        distance = np.linalg.norm(current_pos - self.end_position)
+        return distance <= self.reward_config.end_position_tolerance
+    
+    def _calculate_new_reward(self, current_throughput: float, current_speed: float, 
+                             episode_done: bool, reached_end: bool) -> Dict[str, float]:
+        """Calculate reward using new discrete 5-way strategy"""
+        # Get user positions and individual throughputs
+        user_positions = self.user_manager.get_user_positions()
+        
+        # Calculate individual user throughputs (FIXED - always provide throughput)
+        uav_position = self.uav.get_position()
+        user_throughputs = []
+        
+        for user_pos in user_positions:
+            # Distance-based throughput (always positive, decreases with distance)
+            distance = np.linalg.norm(uav_position - user_pos)
+            # Use exponential decay based on distance
+            distance_factor = np.exp(-distance / 50.0)  # 50m characteristic distance
+            user_throughput = (current_throughput / len(user_positions)) * distance_factor
+            user_throughputs.append(max(0.01, user_throughput))  # Minimum 0.01 to avoid zero
+        
+        user_throughputs = np.array(user_throughputs)
+        
+        # Use reward calculator
+        reward_breakdown = self.reward_calculator.calculate_reward(
+            uav_position=uav_position,
+            end_position=self.end_position,
+            user_positions=user_positions,
+            user_throughputs=user_throughputs,
+            current_time=self.current_time,
+            current_speed=current_speed,
+            env_bounds=self.env_size,
+            episode_done=episode_done,
+            reached_end=reached_end
+        )
+        
+        return reward_breakdown
     
     def __repr__(self) -> str:
         return (f"UAVEnvironment(users={self.num_users}, antennas={self.num_antennas})")

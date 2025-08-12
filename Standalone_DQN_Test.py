@@ -58,51 +58,68 @@ class SimpleDQNCallback(BaseCallback):
 
 
 def create_simple_environment():
-    """创建简化的训练环境"""
+    """创建符合新5-way离散策略的UAV环境"""
     from environment.reward_config import RewardConfig
     
-    # 多目标平衡设计 + 用户专注机制：解决振荡问题
+    # 简化修复版奖励配置 - 确保系统正常工作
     reward_config = RewardConfig(
-        w_rate=3.0,           # 提高吞吐量权重，确保主导地位
-        w_goal=1.0,           # 适度终点导向  
-        w_fair=0.2,           # 大幅降低公平性权重，避免负奖励
-        w_time=0.005,         # 降低时间压力
-        max_expected_throughput=8.0,   # 降低基准，让目标奖励更有竞争力
-        distance_normalization=40.0,  # 适中的距离归一化
-        terminal_bonus=300.0,         # 大幅提高终点奖励
-        hover_penalty=0.1,            # 轻微悬停惩罚
-        end_position_tolerance=15.0,  # 合理容忍度
-        fairness_epsilon=1.0,         # 增大公平性平滑参数，避免大负值
-        # 启用用户专注机制 - 稳定的顺序访问
-        enable_user_focus=True,       # 启用用户专注机制！
-        focus_threshold=1.5,          # 稍低的用户访问完成阈值
-        focus_reward_multiplier=1.0,  # 专注用户满奖励
-        non_focus_reward_multiplier=0.1,  # 非专注用户10%奖励，适度差异
-        focus_stability_steps=100,    # 不再使用，保留兼容性
-        focus_switch_threshold=5.0,   # 不再使用，保留兼容性
-        # 保留访问衰减机制
-        enable_visit_decay=False,     # 暂时关闭，专注测试专注机制
-        visit_decay_radius=20.0,      # 20m访问半径
-        # 门控机制配置
-        enable_visit_gating=True,     # 启用门控机制
-        min_visit_threshold=1.5,      # 与专注阈值一致
-        goal_reward_multiplier=0.1,   # 未完成时目标奖励倍数
-        visited_goal_multiplier=10.0  # 完成后强烈的目标奖励倍数
+        # === 简化核心吞吐量奖励 ===
+        w_throughput_base=100.0,           # 简化基础吞吐量权重
+        w_throughput_multiplier=0.0,       # 禁用复杂距离调制
+        
+        # === 简化移动激励 ===
+        w_movement_bonus=10.0,             # 简化移动奖励
+        w_distance_progress=0.0,           # 禁用距离进展 (避免问题)
+        w_user_approach=50.0,              # 简化用户接近奖励
+        
+        # === 降低惩罚确保稳定性 ===
+        w_oob=100.0,                       # 适中出界惩罚
+        w_stagnation=1.0,                  # 最小停滞惩罚
+        
+        # === 简化终端奖励 ===
+        B_mission_complete=1000.0,         # 清晰任务完成信号
+        B_reach_end=500.0,                # 清晰终点到达奖励
+        B_time_window=500.0,              # 清晰时间窗口奖励
+        B_fair_access=200.0,              # 清晰公平访问奖励
+        B_visit_all_users=300.0,          # 清晰访问用户奖励
+        
+        # === 关键修复 ===
+        alpha_fair=0.0,                   # 禁用proportional fair (关键修复!)
+        user_service_radius=50.0,          # 扩大服务半径 (vs 10.0)
+        
+        # === 放宽距离阈值 ===
+        close_to_user_threshold=40.0,      # 放宽用户接近阈值
+        close_to_end_threshold=30.0,       # 放宽终点接近阈值
+        
+        # === 时间约束 ===
+        min_flight_time=200.0,
+        max_flight_time=300.0,
+        
+        # === 放宽任务完成参数 ===
+        end_position_tolerance=20.0,       # 大幅放宽终点容忍度 (vs 10.0)
+        user_visit_time_threshold=0.5,     # 降低用户访问时间要求 (vs 1.0)
+        
+        # === 放宽停滞检测 ===
+        stagnation_threshold=1.0,          # 更严格检测 (vs 2.0)
+        stagnation_time_window=3.0,        # 更短窗口 (vs 5.0)
+        
+        # === 系统参数 ===
+        time_step=0.1
     )
     
     env = UAVEnvironment(
         env_size=(100, 100, 50),
         num_users=2,
         num_antennas=8,
-        start_position=(0, 0, 50),  # 正确起点
+        start_position=(0, 0, 50),    # 起点
         end_position=(80, 80, 50),    # 终点
-        flight_time=250.0,            # 减少到150秒
+        flight_time=300.0,            # 匹配时间窗口上限
         time_step=0.1,                # 0.1秒步长
         transmit_power=0.5,
         max_speed=30.0,
         min_speed=10.0,
         fixed_users=True,             # 固定用户位置
-        reward_config=reward_config,   # 使用调整后的奖励配置
+        reward_config=reward_config,  # 使用新的离散5-way策略奖励配置
         seed=42                       # 固定随机种子
     )
     
@@ -114,6 +131,7 @@ def create_simple_environment():
     
     print(f"环境配置: 2用户, 8天线, mrt+proportional")
     print(f"起点: {env.start_position}, 终点: {env.end_position}")
+    print(f"简化修复策略: 离散5-way RL + 简化奖励 + 确保稳定性")
     
     # 手动设置用户位置来确保有用户
     fixed_positions = np.array([
@@ -124,31 +142,41 @@ def create_simple_environment():
     
     print(f"用户位置: {env.get_user_positions()}")
     print(f"飞行时间: {env.flight_time}s, 步长: {env.time_step}s, 预期步数: {int(env.flight_time/env.time_step)}")
+    print(f"关键修复: 服务半径={reward_config.user_service_radius}m, 禁用proportional fair={reward_config.alpha_fair}")
+    print(f"奖励权重: 吞吐量基础={reward_config.w_throughput_base}, 移动={reward_config.w_movement_bonus}")
+    print(f"终端奖励: 完整任务={reward_config.B_mission_complete}, 到达终点={reward_config.B_reach_end}")
+    print(f"时间约束: [{reward_config.min_flight_time}, {reward_config.max_flight_time}]s")
     
     return env
 
 
-def train_simple_dqn(env, total_timesteps=50000):
-    """训练简化DQN"""
+def train_simple_dqn(env, total_timesteps=80000):
+    """训练新策略DQN - 针对离散5-way约束RL优化"""
     # 用Monitor包装来记录episode统计
     monitored_env = Monitor(env)
     
-    # 创建DQN智能体 - 增强探索能力
+    # 创建DQN智能体 - 针对新策略优化
     agent = DQN(
         policy='MlpPolicy',
         env=monitored_env,
-        learning_rate=1e-3,
-        gamma=0.99,
-        batch_size=32,
-        buffer_size=100000,
-        exploration_fraction=0.5,     # 50%时间用于探索，更快收敛
-        exploration_final_eps=0.02,   # 最终2%随机，减少后期波动
+        learning_rate=5e-4,           # 适中学习率，稳定学习
+        gamma=0.995,                  # 高折扣因子，重视长期回报
+        batch_size=64,                # 较大批次，稳定梯度
+        buffer_size=200000,           # 大缓冲区，丰富经验
+        exploration_fraction=0.7,     # 70%时间探索，充分学习环境
+        exploration_initial_eps=1.0,  # 初始完全随机
+        exploration_final_eps=0.02,   # 最终少量随机
         verbose=1,
         seed=42,
         # DQN特定参数  
-        learning_starts=1000,         # 提前学习，更快收敛
-        train_freq=4,                 # 训练频率
-        target_update_interval=1000,  # 更快的目标网络更新
+        learning_starts=2000,         # 充分收集经验后开始学习
+        train_freq=8,                 # 适中训练频率
+        target_update_interval=2000,  # 稳定的目标网络更新
+        gradient_steps=1,             # 每次更新1步
+        tau=1.0,                      # 硬更新目标网络
+        policy_kwargs=dict(
+            net_arch=[256, 256, 128]  # 更深网络，适应复杂奖励
+        )
     )
     
     # 创建回调
@@ -157,8 +185,11 @@ def train_simple_dqn(env, total_timesteps=50000):
     print(f"DQN智能体配置完成")
     print(f"观测空间: {monitored_env.observation_space}")
     print(f"动作空间: {monitored_env.action_space}")
+    print(f"网络架构: {agent.policy_kwargs}")
+    print(f"超参数: lr={agent.learning_rate}, gamma={agent.gamma}, batch_size={agent.batch_size}")
+    print(f"探索策略: 初始ε={agent.exploration_initial_eps}, 最终ε={agent.exploration_final_eps}, 探索比例={agent.exploration_fraction}")
     
-    print(f"\n开始DQN训练，总步数: {total_timesteps}")
+    print(f"\n开始新策略DQN训练，总步数: {total_timesteps}")
     start_time = time.time()
     
     # 开始训练
@@ -424,13 +455,13 @@ def plot_trajectory_analysis(result, env):
 
 
 def main():
-    print("=== 独立DQN训练测试 ===")
+    print("=== 新策略DQN训练测试 - 离散5-way约束RL ===")
     
     # 1. 创建环境
     env = create_simple_environment()
     
     # 2. 训练DQN
-    agent, callback, monitored_env = train_simple_dqn(env, total_timesteps=30000)
+    agent, callback, monitored_env = train_simple_dqn(env, total_timesteps=80000)
     
     # 3. 绘制训练结果
     print("\n绘制训练收敛曲线...")

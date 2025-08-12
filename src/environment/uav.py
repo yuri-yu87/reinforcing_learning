@@ -83,7 +83,7 @@ class UAV:
             direction_2d = direction_2d / np.linalg.norm(direction_2d) #Euclidean norm
         
         # Calculate new position based on time step
-        new_position = self.position.copy()
+        new_position = self.position.copy().astype(np.float64)  # Ensure float64 type
         new_position[:2] += direction_2d * speed * time_step  # Distance = speed * time
         
         # Apply boundary constraints
