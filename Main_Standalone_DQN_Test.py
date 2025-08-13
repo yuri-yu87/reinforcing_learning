@@ -48,41 +48,47 @@ class SimpleDQNCallback(BaseCallback):
                         self.episode_count += 1
                         if self.verbose > 0 and self.episode_count % 5 == 0:
                             print(f"Episode {self.episode_count}: reward={ep_info['r']:.2f}, length={ep_info['l']}")
+                    else:
+                        # Debug: If episode info not found, let's see what's available
+                        if self.verbose > 0:
+                            print(f"Debug: Episode completed but no episode info found. Done[{i}]={done}")
+                            if i < len(infos):
+                                print(f"Debug: infos[{i}] keys: {list(infos[i].keys()) if infos[i] else 'None'}")
         return True
 
 
 def create_enhanced_environment():
-    """Create UAV environment with strong terminal guidance strategy"""
+    """Create UAV environment with stable convergence strategy"""
     from environment.reward_config import RewardConfig
 
     reward_config = RewardConfig(
         # === Core throughput reward ===
-        w_throughput_base=120.0,           # Keep base throughput weight
+        w_throughput_base=100.0,           # Keep base throughput weight
         w_throughput_multiplier=0.0,       # Disable complex distance modulation
 
         # === Strong movement incentives ===
-        w_movement_bonus=25.0,             # Further enhance movement reward (vs 20.0)
-        w_distance_progress=40.0,          # Greatly enhance distance progress reward (vs 30.0)
-        w_user_approach=1500.0,            # Strong user/terminal approach reward (vs 100.0)
+        w_movement_bonus=10.0,             # Further enhance movement reward (vs 20.0)
+        w_distance_progress=0.0,          # Greatly enhance distance progress reward (vs 30.0)
+        w_user_approach=50.0,             # 进一步降低用户接近奖励 (1000 → 700)
 
         # === Balanced penalties for goal orientation ===
         w_oob=100.0,                       # Keep out-of-bounds penalty
-        w_stagnation=10.0,                 # Further increase stagnation penalty (vs 5.0)
+        w_stagnation=1.0,                 # Further increase stagnation penalty (vs 5.0)
 
-        # === Strong terminal rewards ===
-        B_mission_complete=2500.0,         # Further enhance mission complete signal (vs 1500.0)
-        B_reach_end=2000.0,                # Strong terminal arrival reward (vs 2000.0)
-        B_time_window=800.0,               # Keep time window reward
-        B_fair_access=2000.0,              # Keep fair access reward
-        B_visit_all_users=2000.0,          # Keep user visit reward
+        # === 稳定的终端奖励 (降低幅度避免梯度爆炸) ===
+        B_mission_complete=1000.0,         # 降低任务完成奖励 (2500 → 1500)
+        B_reach_end=500.0,                # 降低终端到达奖励 (1500 → 1000)
+        B_time_window=500.0,               # 降低时间窗口奖励 (600 → 400)
+        B_fair_access=200.0,               # 降低公平访问奖励 (1000 → 600)
+        B_visit_all_users=300.0,           # 降低访问所有用户奖励 (1200 → 800)
 
-        # === Key fixes ===
-        alpha_fair=0.0,                    # Disable proportional fair
-        user_service_radius=40.0,          # Keep user service radius
+        # === 关键修复 ===
+        alpha_fair=0.0,                    # 禁用比例公平
+        user_service_radius=50.0,          # 保持用户服务半径
 
         # === Strong terminal guidance thresholds ===
-        close_to_user_threshold=60.0,      # Keep user approach threshold
-        close_to_end_threshold=60.0,       # Greatly expand terminal approach threshold (vs 60.0)
+        close_to_user_threshold=40.0,      # Keep user approach threshold
+        close_to_end_threshold=30.0,       # Greatly expand terminal approach threshold (vs 60.0)
 
         # === Time constraints ===
         min_flight_time=200.0,
@@ -90,11 +96,11 @@ def create_enhanced_environment():
 
         # === Challenging mission completion parameters ===
         end_position_tolerance=20.0,       # Further reduce to 8m (vs 10.0)
-        user_visit_time_threshold=1.0,     # Keep user visit time requirement
+        user_visit_time_threshold=0.5,     # Keep user visit time requirement
 
         # === Stricter stagnation detection ===
-        stagnation_threshold=0.8,          # Stricter detection (vs 1.0)
-        stagnation_time_window=2.5,        # Shorter window (vs 3.0)
+        stagnation_threshold=1,          # Stricter detection (vs 1.0)
+        stagnation_time_window=3,        # Shorter window (vs 3.0)
 
         # === System parameters ===
         time_step=0.1
@@ -137,27 +143,27 @@ def train_enhanced_dqn(env, total_timesteps=250000):
     # Wrap with Monitor to record episode statistics
     monitored_env = Monitor(env)
 
-    # Create DQN agent - optimized for high-precision arrival
+    # Create DQN agent - optimized for stable convergence
     agent = DQN(
         policy='MlpPolicy',
         env=monitored_env,
-        learning_rate=3e-4,           # Lower learning rate, more stable learning
-        gamma=0.998,                  # Higher discount factor, more focus on long-term return
-        batch_size=128,               # Larger batch, more stable gradients
-        buffer_size=300000,           # Larger buffer, richer experience
-        exploration_fraction=0.8,     # 80% exploration, sufficient learning for precise strategy
+        learning_rate=5e-4,           # 进一步降低学习率 (1e-4 → 5e-5)
+        gamma=0.995,                  # Higher discount factor, more focus on long-term return
+        batch_size=64,               # 增加批次大小，稳定梯度 (128 → 256)
+        buffer_size=200000,           # Larger buffer, richer experience
+        exploration_fraction=0.7,     # 80% exploration, sufficient learning for precise strategy
         exploration_initial_eps=1.0,  # Fully random at start
-        exploration_final_eps=0.01,   # Less final randomness
+        exploration_final_eps=0.02,   # Less final randomness
         verbose=1,
         seed=42,
         # DQN specific parameters
-        learning_starts=3000,         # More initial experience collection
-        train_freq=4,                 # More frequent training
-        target_update_interval=1500,  # More frequent target network updates
+        learning_starts=2000,         # More initial experience collection
+        train_freq=8,                 # More frequent training
+        target_update_interval=2000,  # More frequent target network updates
         gradient_steps=1,             # 1 step per update
         tau=1.0,                      # Hard update for target network
         policy_kwargs=dict(
-            net_arch=[512, 256, 128]  # Deeper and wider network for complex precise strategy
+            net_arch=[256, 256, 128]  # Deeper and wider network for complex precise strategy
         )
     )
 
@@ -179,6 +185,25 @@ def train_enhanced_dqn(env, total_timesteps=250000):
         print(f"Average reward: {np.mean(callback.episode_rewards):.2f}")
         print(f"Last 10 episode average reward: {np.mean(callback.episode_rewards[-10:]):.2f}")
 
+    # Fallback: Extract episode data from Monitor if callback didn't collect enough
+    if len(callback.episode_rewards) == 0:
+        # Try different Monitor attributes
+        if hasattr(monitored_env, 'get_episode_rewards'):
+            episode_rewards = monitored_env.get_episode_rewards()
+            if len(episode_rewards) > 0:
+                callback.episode_rewards = episode_rewards
+                print(f"Fallback: Using Monitor.get_episode_rewards() ({len(episode_rewards)} episodes)")
+        elif hasattr(monitored_env, 'episode_returns'):
+            if len(monitored_env.episode_returns) > 0:
+                callback.episode_rewards = list(monitored_env.episode_returns)
+                print(f"Fallback: Using Monitor.episode_returns ({len(monitored_env.episode_returns)} episodes)")
+        elif hasattr(monitored_env, '_episode_returns'):
+            if len(monitored_env._episode_returns) > 0:
+                callback.episode_rewards = list(monitored_env._episode_returns)
+                print(f"Fallback: Using Monitor._episode_returns ({len(monitored_env._episode_returns)} episodes)")
+        else:
+            print("Warning: No episode rewards found in callback or Monitor")
+    
     return agent, callback, monitored_env
 
 
@@ -460,21 +485,21 @@ def plot_enhanced_trajectory_with_circles(result, env):
         success = final_distance <= end_tolerance
 
         metrics_text = f"""
-Performance Summary
+            Performance Summary
 
-Arrived: {'Success' if success else 'Fail'}
-Final Distance: {final_distance:.2f}m
-Tolerance: {end_tolerance}m
-Guidance Range: {close_to_end_threshold}m
-Final Position: ({final_pos[0]:.1f}, {final_pos[1]:.1f})
-Total Reward: {result['total_reward']:.0f}
-Total Throughput: {result['total_throughput']:.1f}
-Total Steps: {result['steps']}
+            Arrived: {'Success' if success else 'Fail'}
+            Final Distance: {final_distance:.2f}m
+            Tolerance: {end_tolerance}m
+            Guidance Range: {close_to_end_threshold}m
+            Final Position: ({final_pos[0]:.1f}, {final_pos[1]:.1f})
+            Total Reward: {result['total_reward']:.0f}
+            Total Throughput: {result['total_throughput']:.1f}
+            Total Steps: {result['steps']}
 
-Guidance Strategy Effect:
-Approach Reward: {reward_config.w_user_approach}
-Distance Progress: {reward_config.w_distance_progress}
-Terminal Reward: {reward_config.B_reach_end}
+            Guidance Strategy Effect:
+            Approach Reward: {reward_config.w_user_approach}
+            Distance Progress: {reward_config.w_distance_progress}
+            Terminal Reward: {reward_config.B_reach_end}
         """
 
         plt.text(0.05, 0.95, metrics_text, transform=plt.gca().transAxes,
@@ -544,7 +569,7 @@ def plot_convergence_comparison(env1_callback, env2_callback):
 
 
 def plot_dwelling_time_trajectories(agent, env, num_episodes=10):
-    """Plot trajectories of 10 optimized UAV episodes with dwelling time markers"""
+    """Plot trajectories of 10 optimized UAV episodes with dwelling time markers (each episode in a different color)"""
     plt.figure(figsize=(16, 10))
     
     # Collect all trajectories and dwelling times
@@ -562,14 +587,19 @@ def plot_dwelling_time_trajectories(agent, env, num_episodes=10):
                 if pos_key not in all_dwelling_times:
                     all_dwelling_times[pos_key] = 0
                 all_dwelling_times[pos_key] += env.unwrapped.time_step
-    
-    # Plot trajectories
+
+    # Plot trajectories (each episode in a different color)
     plt.subplot(2, 2, 1)
-    colors = plt.cm.tab10(np.linspace(0, 1, num_episodes))
+    # Use tab10 or tab20 colormap to ensure each episode has a different color
+    if num_episodes <= 10:
+        color_map = plt.cm.tab10
+    else:
+        color_map = plt.cm.tab20
+    colors = color_map(np.linspace(0, 1, num_episodes))
     
     for i, trajectory in enumerate(all_trajectories):
         plt.plot(trajectory[:, 0], trajectory[:, 1], 
-                color=colors[i], alpha=0.6, linewidth=1.5, label=f'Episode {i+1}')
+                 color=colors[i % len(colors)], alpha=0.8, linewidth=2, label=f'Episode {i+1}')
     
     # Add environment elements
     env_unwrapped = env.unwrapped
@@ -587,7 +617,7 @@ def plot_dwelling_time_trajectories(agent, env, num_episodes=10):
     plt.ylim(0, 100)
     plt.xlabel('X (m)')
     plt.ylabel('Y (m)')
-    plt.title('10 Optimized UAV Trajectories')
+    plt.title('10 Optimized UAV Trajectories\n(Each Episode in Different Color)')
     plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.grid(True, alpha=0.3)
     plt.gca().set_aspect('equal')
@@ -595,10 +625,10 @@ def plot_dwelling_time_trajectories(agent, env, num_episodes=10):
     # Plot dwelling times with scaled markers
     plt.subplot(2, 2, 2)
     
-    # Plot base trajectories in light gray
-    for trajectory in all_trajectories:
+    # Plot base trajectories, each episode in a different color
+    for i, trajectory in enumerate(all_trajectories):
         plt.plot(trajectory[:, 0], trajectory[:, 1], 
-                color='lightgray', alpha=0.3, linewidth=1)
+                 color=colors[i % len(colors)], alpha=0.5, linewidth=1.5, label=f'Episode {i+1}')
     
     # Plot dwelling time markers
     if all_dwelling_times:
@@ -635,7 +665,7 @@ def plot_dwelling_time_trajectories(agent, env, num_episodes=10):
     plt.ylim(0, 100)
     plt.xlabel('X (m)')
     plt.ylabel('Y (m)')
-    plt.title('Dwelling Time Analysis (Marker Size ∝ Time)')
+    plt.title('Dwelling Time Analysis (Marker Size ∝ Time)\n(Trajectories in Different Colors)')
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.gca().set_aspect('equal')
@@ -748,25 +778,35 @@ def main():
     
     # 1. Create enhanced environment (User Set 1)
     env1 = create_enhanced_environment()
+    # Explicitly set User Set 1 positions
+    user_set_1_positions = np.array([
+        [15.0, 75.0, 0.0],   
+        [75.0, 15.0, 0.0]    
+    ])
+    env1.fixed_user_positions = user_set_1_positions.copy()  # Update the fixed positions
+    env1.user_manager.set_user_positions(user_set_1_positions)
+    print(f"User Set 1 positions: {user_set_1_positions[:, :2]}")
     
     # 2. Train enhanced DQN for User Set 1
     print("\n🎯 Training with User Set 1: [(15,75), (75,15)]")
-    agent1, callback1, monitored_env1 = train_enhanced_dqn(env1, total_timesteps=250000)
+    agent1, callback1, monitored_env1 = train_enhanced_dqn(env1, total_timesteps=400000)
     
-    # # 3. Create environment with different user positions (User Set 2)
-    # print("\n🎯 Training with User Set 2: [(30,30), (70,70)]")
-    # env2 = create_enhanced_environment()
-    # # Modify user positions for comparison
-    # alt_positions = np.array([
-    #     [30.0, 30.0, 0.0],   
-    #     [70.0, 70.0, 0.0]    
-    # ])
-    # env2.user_manager.set_user_positions(alt_positions)
-    # agent2, callback2, monitored_env2 = train_enhanced_dqn(env2, total_timesteps=250000)  # Shorter training for comparison
+    # 3. Create environment with different user positions (User Set 2)
+    print("\n🎯 Training with User Set 2: [(30,30), (70,70)]")
+    env2 = create_enhanced_environment()
+    # Modify user positions for comparison
+    user_set_2_positions = np.array([
+        [30.0, 30.0, 0.0],   
+        [70.0, 70.0, 0.0]    
+    ])
+    env2.fixed_user_positions = user_set_2_positions.copy()  # Update the fixed positions
+    env2.user_manager.set_user_positions(user_set_2_positions)
+    print(f"User Set 2 positions: {user_set_2_positions[:, :2]}")
+    agent2, callback2, monitored_env2 = train_enhanced_dqn(env2, total_timesteps=400000)  # Shorter training for comparison
     
-    # # 4. Plot convergence comparison for different user positions
-    # print("\n📈 Plotting convergence comparison...")
-    # plot_convergence_comparison(callback1, callback2)
+    # 4. Plot convergence comparison for different user positions
+    print("\n📈 Plotting convergence comparison...")
+    plot_convergence_comparison(callback1, callback2)
     
     # 5. Plot training results for main environment
     print("\n📊 Plotting main training results...")

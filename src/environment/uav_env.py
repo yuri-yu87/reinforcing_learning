@@ -114,6 +114,9 @@ class UAVEnvironment(gym.Env):
         self.reward_config = reward_config if reward_config is not None else RewardConfig()
         self.reward_calculator = RewardCalculator(self.reward_config)
         
+        # Store last reward breakdown for analysis
+        self._last_reward_breakdown = {}
+        
         # Mission timing (200-300s window constraint)
         self.mission_time_window = (self.reward_config.min_flight_time, self.reward_config.max_flight_time)
         
@@ -172,6 +175,16 @@ class UAVEnvironment(gym.Env):
             self.default_beamforming_method = beamforming_method
         if power_strategy is not None:
             self.default_power_strategy = power_strategy
+    
+    def set_reward_calculator(self, reward_calculator):
+        """
+        Set a custom reward calculator (e.g., ProgressiveRewardCalculator).
+        This allows for runtime switching of reward strategies.
+        """
+        self.reward_calculator = reward_calculator
+        # Update reward_config if the calculator has one
+        if hasattr(reward_calculator, 'config'):
+            self.reward_config = reward_calculator.config
 
     def _setup_spaces(self):
         """Setup action and observation spaces for the environment."""
@@ -478,6 +491,19 @@ class UAVEnvironment(gym.Env):
         if hasattr(self, '_last_reward_breakdown'):
             info['reward_breakdown'] = self._last_reward_breakdown
         
+        # Episode statistics before reset (for curriculum learning success evaluation)
+        if hasattr(self, 'reward_calculator') and self.reward_calculator is not None:
+            episode_stats = self.reward_calculator.get_stats()
+            info['episode_stats'] = episode_stats
+            # 特别提供关键指标
+            info['users_visited'] = episode_stats.get('users_visited', 0)
+            info['user_visited_flags'] = list(episode_stats.get('user_visited_flags', []))
+            info['user_visit_order'] = episode_stats.get('user_visit_order', [])
+        else:
+            info['users_visited'] = 0
+            info['user_visited_flags'] = []
+            info['user_visit_order'] = []
+        
         # Reward configuration (for transparency)
         info['reward_config'] = self.reward_config.to_dict()
         
@@ -644,6 +670,9 @@ class UAVEnvironment(gym.Env):
             episode_done=episode_done,
             reached_end=reached_end
         )
+        
+        # Store for analysis
+        self._last_reward_breakdown = reward_breakdown.copy()
         
         return reward_breakdown
     

@@ -1,0 +1,26 @@
+=== 6阶段高级训练系统综合报告 ===
+
+报告生成时间: 2025-08-13 04:21:50
+训练总时间: 1.7分钟
+总训练回合: 0
+
+=== 各阶段详细性能 ===
+=== 智能奖励系统分析 ===
+系统成功率: 0.00%
+完成率: 0.00%
+性能趋势: +0.000
+监控回合: 0
+智能干预: 0次
+
+=== 系统配置 ===
+adaptive_weight_enabled: True
+intelligent_guidance_enabled: True
+completion_tracking_enabled: True
+learning_difficulty_adjustment: True
+smart_penalty_enabled: True
+
+=== 文件位置 ===
+报告目录: D:\YuLiying\UNSW_POSTGRADUATE\Unsw25T2\ELEC9123\TaskF\results\6stage_training_20250813_042150
+训练曲线: training_curves.png
+阶段性能: stage_performance.png
+智能分析: intelligent_system_analysis.png

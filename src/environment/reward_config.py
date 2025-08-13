@@ -43,7 +43,7 @@ class RewardConfig:
     
     # === CRITICAL FIXES ===
     alpha_fair: float = 0.0               # DISABLE proportional fair (was 1.0)
-    user_service_radius: float = 50.0     # EXPAND service radius (was 10.0)
+    user_service_radius: float = 60.0     # EXPAND service radius (was 10.0)
     fairness_epsilon: float = 1e-6        # Keep for compatibility
     
     # === TIME CONSTRAINTS ===
@@ -51,7 +51,7 @@ class RewardConfig:
     max_flight_time: float = 300.0
     
     # === RELAXED DISTANCE THRESHOLDS ===
-    close_to_user_threshold: float = 40.0  # Generous user proximity threshold
+    close_to_user_threshold: float = 70.0  # Generous user proximity threshold
     close_to_end_threshold: float = 30.0   # Generous end proximity threshold
     
     # === RELAXED MISSION COMPLETION PARAMETERS ===
